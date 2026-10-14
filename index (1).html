@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kaleido Doodle</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔮</text></svg>">
+<style>
+:root{--bg:#F2F3F8;--ink:#1A1B33;--muted:#5B5E7A;--line:#D3D6E4;--panel:#fff;--accent:#3B3FD9}
+@media (prefers-color-scheme:dark){:root{--bg:#14152A;--ink:#EEF0FF;--muted:#9DA1C4;--line:#2E3052;--panel:#1D1F3A;--accent:#8D90FF}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:system-ui,-apple-system,"Segoe UI",sans-serif;display:flex;flex-direction:column;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+header{padding:12px 16px 0}
+h1{margin:0;font-size:1.4rem;letter-spacing:-.02em}
+header p{margin:2px 0 0;color:var(--muted);font-size:.85rem}
+.bar{display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;padding:12px 16px;background:var(--panel);border-bottom:1px solid var(--line)}
+.bar label{display:flex;align-items:center;gap:8px;font-size:.85rem;color:var(--muted)}
+.bar output{min-width:2ch;color:var(--ink);font-weight:700}
+input[type=range]{accent-color:var(--accent);width:110px}
+button{font:inherit;font-weight:700;font-size:.85rem;border-radius:10px;border:1px solid var(--line);background:transparent;color:var(--ink);padding:7px 14px;cursor:pointer}
+button.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+button:hover{filter:brightness(1.1)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px}
+.stage{flex:1;min-height:0;padding:12px 16px 16px}
+canvas{display:block;width:100%;height:100%;border-radius:16px;background:#0D0B1A;touch-action:none;cursor:crosshair}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Kaleido Doodle</h1>
+  <p>Draw anywhere. Every stroke is mirrored around the center.</p>
+</header>
+<div class="bar">
+  <label>Slices <input type="range" id="slices" min="2" max="20" value="8"><output id="slicesO">8</output></label>
+  <label>Brush <input type="range" id="size" min="1" max="14" value="3"><output id="sizeO">3</output></label>
+  <label>Hue <input type="range" id="hue" min="0" max="360" value="280"><output id="hueO">280</output></label>
+  <label><input type="checkbox" id="rainbow" checked> Rainbow</label>
+  <label><input type="checkbox" id="mirror" checked> Mirror</label>
+  <label><input type="checkbox" id="glow" checked> Glow</label>
+  <button id="surprise" class="primary">Surprise me</button>
+  <button id="undo">Undo</button>
+  <button id="clear">Clear</button>
+  <button id="save">Save PNG</button>
+</div>
+<div class="stage"><canvas id="cv" aria-label="Drawing canvas"></canvas></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const cv = $('cv'), ctx = cv.getContext('2d');
+let W = 0, H = 0, dpr = 1, hue = 280, last = null, drawing = false, anim = 0;
+const undoStack = [];
+
+function resize(){
+  const old = document.createElement('canvas'); old.width = cv.width; old.height = cv.height;
+  if(cv.width) old.getContext('2d').drawImage(cv,0,0);
+  dpr = window.devicePixelRatio || 1;
+  const r = cv.getBoundingClientRect();
+  W = r.width; H = r.height;
+  cv.width = Math.round(W*dpr); cv.height = Math.round(H*dpr);
+  ctx.fillStyle = '#0D0B1A'; ctx.fillRect(0,0,cv.width,cv.height);
+  if(old.width) ctx.drawImage(old,0,0);
+}
+addEventListener('resize', resize);
+
+['slices','size','hue'].forEach(id => $(id).oninput = () => $(id+'O').textContent = $(id).value);
+
+function stroke(x1,y1,x2,y2){
+  const n = +$('slices').value, mirror = $('mirror').checked;
+  ctx.save();
+  ctx.scale(dpr,dpr); ctx.translate(W/2,H/2);
+  ctx.lineCap = 'round'; ctx.lineWidth = +$('size').value;
+  const color = 'hsl('+hue+' 90% 62%)';
+  ctx.strokeStyle = color;
+  if($('glow').checked){ ctx.shadowColor = color; ctx.shadowBlur = 12; }
+  for(let i=0;i<n;i++){
+    ctx.save(); ctx.rotate(i*2*Math.PI/n);
+    for(let m=0;m<(mirror?2:1);m++){
+      ctx.beginPath(); ctx.moveTo(x1,y1); ctx.lineTo(x2,y2); ctx.stroke();
+      ctx.scale(1,-1);
+    }
+    ctx.restore();
+  }
+  ctx.restore();
+  if($('rainbow').checked){ hue = (hue + 1.5) % 360; $('hue').value = Math.round(hue); $('hueO').textContent = Math.round(hue); }
+  else hue = +$('hue').value;
+}
+
+function snapshot(){
+  undoStack.push(ctx.getImageData(0,0,cv.width,cv.height));
+  if(undoStack.length > 15) undoStack.shift();
+}
+function pos(e){ const r = cv.getBoundingClientRect(); return [e.clientX-r.left-W/2, e.clientY-r.top-H/2]; }
+
+cv.addEventListener('pointerdown', e => {
+  cancelAnimationFrame(anim); snapshot();
+  drawing = true; cv.setPointerCapture(e.pointerId); last = pos(e);
+  if(!$('rainbow').checked) hue = +$('hue').value;
+  stroke(last[0],last[1],last[0]+.01,last[1]);
+});
+cv.addEventListener('pointermove', e => {
+  if(!drawing) return;
+  const p = pos(e); stroke(last[0],last[1],p[0],p[1]); last = p;
+});
+['pointerup','pointercancel'].forEach(t => cv.addEventListener(t, () => drawing = false));
+
+$('undo').onclick = () => { cancelAnimationFrame(anim); const s = undoStack.pop(); if(s) ctx.putImageData(s,0,0); };
+$('clear').onclick = () => { cancelAnimationFrame(anim); snapshot(); ctx.fillStyle = '#0D0B1A'; ctx.fillRect(0,0,cv.width,cv.height); };
+$('save').onclick = () => {
+  cv.toBlob(b => { const a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'kaleido-doodle.png'; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); });
+};
+
+/* Surprise: random settings, then a random looping curve draws itself. */
+$('surprise').onclick = () => {
+  cancelAnimationFrame(anim); snapshot();
+  const rnd = (a,b) => a + Math.random()*(b-a);
+  $('slices').value = Math.round(rnd(4,16)); $('slicesO').textContent = $('slices').value;
+  $('size').value = Math.round(rnd(2,6)); $('sizeO').textContent = $('size').value;
+  $('rainbow').checked = true; $('mirror').checked = Math.random() > .3;
+  const R = Math.min(W,H)*.42, a = Math.round(rnd(2,7)), b = Math.round(rnd(3,9)), ph = rnd(0,6.28), f = rnd(.5,1);
+  let t = 0, prev = null;
+  const pt = t => { const k = 1 - f*.5*(t/(2*Math.PI*6)); return [R*k*Math.sin(a*t+ph)*(.6+.4*Math.cos(t)), R*k*Math.sin(b*t)*(.6+.4*Math.sin(t*.5))]; };
+  (function step(){
+    for(let i=0;i<6;i++){
+      const p = pt(t); if(prev) stroke(prev[0],prev[1],p[0],p[1]); prev = p; t += .02;
+    }
+    if(t < 2*Math.PI*6) anim = requestAnimationFrame(step);
+  })();
+};
+
+resize();
+</script>
+</body>
+</html>
